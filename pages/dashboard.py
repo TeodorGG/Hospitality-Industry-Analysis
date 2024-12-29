@@ -1,36 +1,61 @@
 import streamlit as st
-import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
-import numpy as np
+import pandas as pd
 from config.settings import FRED_CONFIG
 
 
-def get_metric_name(series_id, category):
-    """Get friendly name for metric from config"""
-    if category in FRED_CONFIG['series']:
-        if series_id in FRED_CONFIG['series'][category]:
-            return FRED_CONFIG['series'][category][series_id]['name']
-    return series_id
+def calculate_change_value(series, series_info):
+    """Calculate change value based on series type and settings"""
+    if len(series) < 2:
+        return 0
+
+    correlation = series_info.get('correlation', 'Direct')
+    units = series_info.get('units', 'lin')
+    is_percent = series_info.get('is_percent', False)
+
+    # For series already in YoY percent change (units='pc1')
+    if units == 'pc1':
+        change = series.iloc[-1]
+    else:
+        if is_percent:
+            # For percentage metrics, use absolute change
+            change = series.iloc[-1] - series.iloc[-2]
+        else:
+            # For non-percentage metrics, calculate percent change
+            change = (series.iloc[-1] / series.iloc[-2] - 1) * 100
+
+    # Inverse the change for inverse correlation
+    return -change if correlation == 'Inverse' else change
 
 
-def calculate_status(series):
-    """
-    Calculate status based on last 3 months of data
-    Returns: status, color
-    """
-    last_three = series.tail(3)
-    if len(last_three) < 3:
+def calculate_status(series, series_info):
+    """Calculate status based on series configuration"""
+    if len(series) < 4:  # Need at least 4 values to get 3 changes
         return "Insufficient data", "gray"
 
-    changes = last_three.pct_change()
+    correlation = series_info.get('correlation', 'Direct')
+    units = series_info.get('units', 'lin')
+
+    # For YoY percent change series, use the values directly
+    if units == 'pc1':
+        changes = series.tail(3)
+    else:
+        # Get last 4 values and calculate 3 changes
+        last_four = series.tail(4)
+        changes = last_four.pct_change().tail(3)
+
+    # Adjust for inverse correlation
+    if correlation == 'Inverse':
+        changes = -changes
+
     positive_changes = (changes > 0).sum()
+    latest_change = changes.iloc[-1] > 0
 
     if positive_changes == 3:
         return "All clear", "green"
-    elif positive_changes == 2 and changes.iloc[-1] > 0:
+    elif positive_changes == 2 and latest_change:
         return "Keep an eye", "lightgreen"
-    elif positive_changes == 1 and changes.iloc[-1] < 0:
+    elif positive_changes == 1 and not latest_change:
         return "Potential danger", "orange"
     elif positive_changes == 0:
         return "Danger", "red"
@@ -38,18 +63,20 @@ def calculate_status(series):
         return "Keep an eye", "yellow"
 
 
-def create_metric_card(title, value, change, status, color):
-    """Create a card for a single metric"""
+def create_metric_card(title, value, change, status, color, is_percent=False):
+    """Create a metric card with proper formatting"""
+    value_display = f"{value:.2f}%" if is_percent else f"{value:,.2f}"
+
     card_html = f"""
     <div style="
         padding: 20px;
         border-radius: 10px;
         border: 1px solid #ddd;
         margin: 10px;
-        background-color: {color}20;  /* 20 for transparency */
+        background-color: {color}20;
         border-left: 5px solid {color};">
         <h4 style="margin: 0; color: black;">{title}</h4>
-        <p style="font-size: 24px; margin: 10px 0; color: black;">{value:,.2f}</p>
+        <p style="font-size: 24px; margin: 10px 0; color: black;">{value_display}</p>
         <p style="margin: 0; color: {'green' if change >= 0 else 'red'}">
             {change:+.2f}% ({status})
         </p>
@@ -59,50 +86,50 @@ def create_metric_card(title, value, change, status, color):
 
 
 def show_dashboard(data_dict):
-    """Display main dashboard"""
+    """Display the main dashboard"""
     st.title("Hospitality Industry Dashboard")
 
-    # Organize indicators by category
     for category_name, category_df in data_dict.items():
         if category_df is not None and not category_df.empty:
             st.header(category_name)
 
-            # Create grid for cards (3 per row)
             cols = st.columns(3)
             col_idx = 0
 
             for series_id in category_df.columns:
                 series = category_df[series_id]
+                series_info = FRED_CONFIG['series'][category_name][series_id]
 
-                # Get friendly metric name
-                metric_name = get_metric_name(series_id, category_name)
+                # Get metric properties
+                metric_name = series_info['name']
+                is_percent = series_info.get('is_percent', False)
 
-                # Calculate required metrics
+                # Calculate metrics
                 current_value = series.iloc[-1]
-                status, color = calculate_status(series)
+                change = calculate_change_value(series, series_info)
+                status, color = calculate_status(series, series_info)
 
-                # Calculate month-over-month percentage change
-                monthly_change = (series.iloc[-1] / series.iloc[-2] - 1) * 100 if len(series) > 1 else 0
-
-                # Create and display the card
+                # Create and display card
                 card = create_metric_card(
                     metric_name,
                     current_value,
-                    monthly_change,
+                    change,
                     status,
-                    color
+                    color,
+                    is_percent or series_info.get('units') == 'pc1'
                 )
 
                 cols[col_idx].markdown(card, unsafe_allow_html=True)
 
-                # Add mini chart below card
+                # Add trend chart
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
-                    x=series.index[-12:],  # Last 12 months
+                    x=series.index[-12:],
                     y=series.values[-12:],
                     mode='lines',
                     line=dict(color=color)
                 ))
+
                 fig.update_layout(
                     height=100,
                     margin=dict(l=0, r=0, t=0, b=0),
@@ -110,12 +137,11 @@ def show_dashboard(data_dict):
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)'
                 )
+
                 cols[col_idx].plotly_chart(fig, use_container_width=True)
 
-                # Move to next column
                 col_idx = (col_idx + 1) % 3
 
-            # Add separator between categories
             st.markdown("---")
 
     # Status legend
@@ -138,7 +164,7 @@ def show_dashboard(data_dict):
 def show_page():
     """Main page function"""
     if not hasattr(st.session_state, 'category_data'):
-        st.warning("Please load data first")
+        st.warning("Please load data first in the Data Viewer page")
         return
 
     show_dashboard(st.session_state.category_data)
