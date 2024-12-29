@@ -6,6 +6,46 @@ import numpy as np
 from data.fred_api import FREDReader
 from config.settings import FRED_CONFIG
 
+# Define color palette
+COLORS = {
+    'Employment': {
+        'USLAH': '#1f77b4',  # blue
+        'CES7000000003': '#ff7f0e',  # orange
+        'AWHAELAH': '#2ca02c',  # green
+        'JTS7000JOL': '#d62728',  # red
+        'IHLIDXUSTPHOTO': '#9467bd',  # purple
+        'LNU04032241': '#8c564b',  # brown
+        'CES7000000008': '#e377c2',  # pink
+        'ADPWINDLSHPNERSA': '#7f7f7f',  # gray
+        'JTS7000QUR': '#bcbd22',  # yellow-green
+        'JTS7000HIL': '#17becf'  # cyan
+    },
+    'Revenues': {
+        'DRCARC1Q027SBEA': '#1f77b4',  # blue
+        'DFSARC1Q027SBEA': '#ff7f0e'  # orange
+    },
+    'Inflation': {
+        'PCU721110721110': '#1f77b4',  # blue
+        'PCU721110721110103': '#ff7f0e',  # orange
+        'PCU5615105615102111': '#2ca02c',  # green
+        'PCU561510561510211': '#d62728'  # red
+    },
+    'General': {
+        'UMCSENT': '#1f77b4',  # blue
+        'PI': '#ff7f0e',  # orange
+        'PCE': '#2ca02c',  # green
+        'PAYEMS': '#d62728',  # red
+        'GDP': '#9467bd',  # purple
+        'UNRATE': '#8c564b',  # brown
+        'CCSA': '#e377c2',  # pink
+        'DSPI': '#7f7f7f',  # gray
+        'CPIAUCSL': '#bcbd22',  # yellow-green
+        'DGS20': '#17becf',  # cyan
+        'DGS10': '#ff9896',  # light red
+        'DGS2': '#98df8a'  # light green
+    }
+}
+
 
 def analyze_scales(df: pd.DataFrame, metrics: list) -> dict:
     """Analyze and group metrics based on their scale"""
@@ -20,7 +60,6 @@ def analyze_scales(df: pd.DataFrame, metrics: list) -> dict:
                     'magnitude': np.log10(abs(data.mean())) if data.mean() != 0 else 0
                 }
 
-    # Group metrics by order of magnitude
     grouped_metrics = {}
     if scale_info:
         magnitudes = [info['magnitude'] for info in scale_info.values()]
@@ -46,18 +85,18 @@ def create_grouped_charts(df: pd.DataFrame, metrics_groups: dict, category: str,
 
         for metric in metrics:
             if metric in df.columns:
+                # Get metric info and friendly name
                 series_info = FRED_CONFIG['series'][category].get(metric, {})
-                correlation = series_info.get('correlation', 'Direct')
+                friendly_name = series_info.get('name', metric)
                 data = df[metric].dropna()
-                name = series_info.get('name', metric)
 
-                # Set color based on correlation
-                color = 'green' if correlation == 'Direct' else 'red'
+                # Get metric color
+                color = COLORS[category].get(metric, '#000000')
 
                 fig.add_trace(go.Scatter(
                     x=data.index,
                     y=data.values,
-                    name=name,
+                    name=friendly_name,  # Use friendly name here
                     mode='lines',
                     line=dict(color=color)
                 ))
@@ -78,59 +117,41 @@ def create_grouped_charts(df: pd.DataFrame, metrics_groups: dict, category: str,
 
 
 def show_category_data(df: pd.DataFrame, category_name: str):
-    """Display data for a specific category"""
+    """Display data for a specific category, treating each series independently"""
     if df.empty:
         st.warning(f"No data available for {category_name}")
         return
 
     st.subheader(f"{category_name} Metrics")
 
-    # Get available metrics
-    metrics = df.columns.tolist()
+    # Create a mapping of metric codes to friendly names
+    metric_names = {
+        metric: FRED_CONFIG['series'][category_name][metric]['name']
+        for metric in df.columns
+    }
 
-    # Group metrics by type (percent vs non-percent)
-    percent_metrics = [m for m in metrics
-                       if FRED_CONFIG['series'][category_name].get(m, {}).get('is_percent', False)]
-    non_percent_metrics = [m for m in metrics if m not in percent_metrics]
+    # Iterate over each series individually
+    for series_id in df.columns:
+        st.subheader(metric_names[series_id])
 
-    # Display non-percentage metrics with scale grouping
-    if non_percent_metrics:
-        st.subheader("Value Metrics")
-        grouped_metrics = analyze_scales(df, non_percent_metrics)
-        figures = create_grouped_charts(
-            df,
-            grouped_metrics,
-            category_name,
-            "Value Metrics Trends"
-        )
-        for fig in figures:
-            st.plotly_chart(fig, use_container_width=True)
+        series = df[series_id].dropna()
+        if series.empty:
+            st.warning(f"No data available for {metric_names[series_id]}")
+            continue
 
-    # Display percentage metrics (no scale grouping needed)
-    if percent_metrics:
-        st.subheader("Percentage Metrics")
+        # Display trend chart for the series
         fig = go.Figure()
-
-        for metric in percent_metrics:
-            series_info = FRED_CONFIG['series'][category_name].get(metric, {})
-            correlation = series_info.get('correlation', 'Direct')
-            data = df[metric].dropna()
-            name = series_info.get('name', metric)
-
-            color = 'green' if correlation == 'Direct' else 'red'
-
-            fig.add_trace(go.Scatter(
-                x=data.index,
-                y=data.values,
-                name=name,
-                mode='lines',
-                line=dict(color=color)
-            ))
-
+        fig.add_trace(go.Scatter(
+            x=series.index,
+            y=series.values,
+            mode='lines',
+            name=metric_names[series_id],
+            line=dict(color=COLORS[category_name].get(series_id, '#000000'))
+        ))
         fig.update_layout(
-            title="Percentage Metrics Trends",
+            title=f"Trend for {metric_names[series_id]}",
             xaxis_title="Date",
-            yaxis_title="Percent",
+            yaxis_title="Value",
             height=400,
             template="plotly_white",
             hovermode='x unified',
@@ -139,18 +160,24 @@ def show_category_data(df: pd.DataFrame, category_name: str):
 
         st.plotly_chart(fig, use_container_width=True)
 
-    # Data tables
-    with st.expander("View Data Tables"):
-        st.dataframe(df.round(2))
+        # Display summary statistics for the series
+        st.write(f"Summary Statistics for {metric_names[series_id]}")
+        st.dataframe(series.describe().to_frame().T)
 
-        # Export option
-        csv = df.to_csv()
+        # Export option with unique key
+        csv = series.to_csv()
         st.download_button(
-            f"Download {category_name} Data (CSV)",
-            csv,
-            f"{category_name.lower()}_data.csv",
-            "text/csv"
+            label=f"Download {metric_names[series_id]} Data (CSV)",
+            data=csv,
+            file_name=f"{metric_names[series_id].replace(' ', '_').lower()}_data.csv",
+            mime="text/csv",
+            key=f"{category_name}_{series_id}_download"  # Unique key
         )
+
+    # Provide an option to view the full data table
+    with st.expander("View Full Data Table"):
+        st.dataframe(df)
+
 
 
 def show_page():
@@ -165,7 +192,7 @@ def show_page():
             with st.spinner("Loading data from FRED..."):
                 category_data = fred_reader.load_all_categories(FRED_CONFIG)
                 if category_data:
-                    st.session_state.category_data = category_data
+                    st.session_state['category_data'] = category_data
                     st.success("Data loaded successfully!")
                 else:
                     st.error("No data loaded")
@@ -173,7 +200,7 @@ def show_page():
             st.error(f"Error loading data: {str(e)}")
 
     # Display data if available
-    if hasattr(st.session_state, 'category_data') and st.session_state.category_data:
+    if 'category_data' in st.session_state and st.session_state['category_data']:
         # Create tabs for categories
         categories = list(FRED_CONFIG['series'].keys())
         tabs = st.tabs(categories)
@@ -181,9 +208,9 @@ def show_page():
         # Display each category
         for tab, category in zip(tabs, categories):
             with tab:
-                if category in st.session_state.category_data:
+                if category in st.session_state['category_data']:
                     show_category_data(
-                        st.session_state.category_data[category],
+                        st.session_state['category_data'][category],
                         category
                     )
                 else:

@@ -86,22 +86,26 @@ def create_metric_card(title, value, change, status, color, is_percent=False):
 
 
 def show_dashboard(data_dict):
-    """Display the main dashboard"""
+    """Display the main dashboard with grouped metrics for each category"""
     st.title("Hospitality Industry Dashboard")
 
     for category_name, category_df in data_dict.items():
         if category_df is not None and not category_df.empty:
             st.header(category_name)
 
-            cols = st.columns(3)
+            # Iterate through metrics in the category
+            cols = st.columns(3)  # Layout: 3 columns for metric cards and charts
             col_idx = 0
 
-            for series_id in category_df.columns:
-                series = category_df[series_id]
-                series_info = FRED_CONFIG['series'][category_name][series_id]
+            for metric in category_df.columns:
+                series = category_df[metric].dropna()
+                if series.empty:
+                    st.warning(f"No data available for {metric}")
+                    continue
 
-                # Get metric properties
-                metric_name = series_info['name']
+                # Retrieve metric info
+                series_info = FRED_CONFIG['series'][category_name].get(metric, {})
+                metric_name = series_info.get('name', metric)
                 is_percent = series_info.get('is_percent', False)
 
                 # Calculate metrics
@@ -118,27 +122,39 @@ def show_dashboard(data_dict):
                     color,
                     is_percent or series_info.get('units') == 'pc1'
                 )
-
                 cols[col_idx].markdown(card, unsafe_allow_html=True)
 
                 # Add trend chart
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
-                    x=series.index[-12:],
-                    y=series.values[-12:],
+                    x=series.index,
+                    y=series.values,
                     mode='lines',
+                    name=metric_name,
                     line=dict(color=color)
                 ))
 
                 fig.update_layout(
-                    height=100,
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    showlegend=False,
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)'
+                    title=f"Trend for {metric_name}",
+                    xaxis_title="Date",
+                    yaxis_title="Value",
+                    height=300,
+                    template="plotly_white",
+                    hovermode='x unified',
+                    showlegend=False
                 )
 
                 cols[col_idx].plotly_chart(fig, use_container_width=True)
+
+                # Add download button with unique key
+                csv = series.to_csv()
+                cols[col_idx].download_button(
+                    label=f"Download {metric_name} Data (CSV)",
+                    data=csv,
+                    file_name=f"{metric_name.replace(' ', '_').lower()}_data.csv",
+                    mime="text/csv",
+                    key=f"{category_name}_{metric}_download"  # Unique key for each button
+                )
 
                 col_idx = (col_idx + 1) % 3
 
@@ -159,6 +175,7 @@ def show_dashboard(data_dict):
             f'border-left: 5px solid {color}; margin: 5px 0;">{status}</div>',
             unsafe_allow_html=True
         )
+
 
 
 def show_page():
